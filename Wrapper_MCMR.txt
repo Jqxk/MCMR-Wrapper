@@ -1,10 +1,13 @@
+using CairoMakie; 
+using GLMakie;
 using MCMRSimulator; 
 using MRIBuilder; 
-using LinearAlgebra; 
-using StaticArrays; 
-using GLMakie; 
 using GeometryBasics;
-using Plots
+using Meshes;
+using FileIO;
+using LinearAlgebra
+
+
 
 function NoColSpheres(size::Float64, td::Float64, mean::Float64, var::Float64, max_iter::Int64, min_r::Float64, max_r::Float64)
 
@@ -19,8 +22,7 @@ function NoColSpheres(size::Float64, td::Float64, mean::Float64, var::Float64, m
 		max_radius = max_r
 	)
 
-
- 	geometry = Spheres(
+	geometry = Spheres(
 		radius = radii,
 		position = positions,
 		R1_surface = 0.1,
@@ -36,6 +38,7 @@ function NoColSpheres(size::Float64, td::Float64, mean::Float64, var::Float64, m
 	return geometry
 end
 
+function check_collision(c1::MCMRSimulator.Geometries.User.Obstructions.ObstructionGroups.ObstructionGroup{:BendyCylinder}, geometry::Vector{MCMRSimulator.Geometries.User.Obstructions.ObstructionGroups.ObstructionGroup{:BendyCylinder}})
 
 	for c2 in geometry #Loop over all cylinders
 
@@ -50,7 +53,7 @@ end
 				distance = norm(p1 .- p2)
 				threshold = c1.radius.value + c2.radius.value 
 				#println("dist = $distance, threshold = $threshold")
-		\
+		
 				if distance < threshold #collision occurs if dist < their radii sum
 					return true
 				end
@@ -66,7 +69,7 @@ function CylGen(z_step::Int64, z_gap::Float64, tortuosity::Float64, spline::Int6
 
 	c_p = [Start .+ [rand(-0.05:0.005:0.05)*tortuosity, rand(-0.05:0.005:0.05)*tortuosity, z_gap*j] for j in 0:z_step]
 
-	geometry_bendy = BendyCylinder(
+	geometry = BendyCylinder(
 		control_point = c_p,
 		radius = rand(min_r:0.005:max_r),
 		spline_order = spline,
@@ -75,13 +78,12 @@ function CylGen(z_step::Int64, z_gap::Float64, tortuosity::Float64, spline::Int6
 		#use default rotation
 	)
 	
-	return geometry_bendy
-
+	return geometry
 end
 
 function NoColCylinder(N::Int64, max_attempts::Int64, z_step::Int64, z_gap::Float64, tortuosity::Float64, spline::Int, min_r::Float64, max_r::Float64, xy_bound::Float64)
 
-	geometry = MCMRSimulator.Geometries.User.Obstructions.ObstructionGroups.ObstructionGroup\{:BendyCylinder\}[] #init vector
+	geometry = MCMRSimulator.Geometries.User.Obstructions.ObstructionGroups.ObstructionGroup{:BendyCylinder}[] #init vector
 
 	for _ in 1:N
 
@@ -109,24 +111,80 @@ function NoColCylinder(N::Int64, max_attempts::Int64, z_step::Int64, z_gap::Floa
 
 		end
 	end
+
 	return geometry
 end
 
-	TR = t_rep
+function MeshGen(geo_params)
 
-	for i in 1:k
-		sequence[i] = DWI(
-			bval = i*b_step, 
-			TE = t_echo, 
-			TR = t_rep, 
-			scanner = Siemens_Prisma
-		)
-		f = plot_sequence(sequence[i])
+	geometry = load_mesh(geo_params)
+
+	return geometry
+end
+
+function B_Iter(b_step, k, t_echo, t_rep, grad)
+
+	if !(grad isa AbstractVector{<:AbstractVector})
+		error("'grad' must be of type ::Vector{Vector{Float64}}.")
+
 	end
 
-	return sequence, TR\
+	sequence = [Vector{Any}(undef, length(grad)) for _ in 1:k] #Initialization, holds upcoming values
+	TR = t_rep
+	bvals = []
+
+	for i in 1:k
+
+		bval = i*b_step
+		push!(bvals, bval)
+
+		for j in 1:length(grad)
+
+			sequence[i][j] = DWI(
+				bval = bval, 
+				TE = t_echo, 
+				TR = t_rep, 
+				scanner = Siemens_Terra,
+				gradient=(type=:instant, orientation = grad[j])
+				)
+		
+		end
+	end
+	
+	sequence = reduce(vcat, sequence)
+	return sequence, TR, bvals
 
 end
+
+function B_IterSE(b_step, k, delay, t_echo, t_rep)
+
+	sequence = Vector{Any}(undef, k)
+
+	TR = t_rep
+	bvals = []
+	
+	for i in 1:k
+
+		bval = i*b_step
+		push!(bvals, bval)
+
+		sequence[i] = SpinEcho(
+			TE = t_echo,                              # Echo time (TE) in ms
+			TR = t_rep,
+			delay = delay,                                        # Delay between readout and spin echo peak in ms
+			bval = bval,                                          # Diffusion weighting (b-value)
+			slice_thickness = 2.0,                    # Slice thickness in mm
+			#excitation = excitation,                # Defined excitation pulse
+			#refocus = refocus,                            # Defined refocus pulse
+			scanner = Siemens_Terra                        # Use the predefined scanner
+		        )
+                end
+
+                return sequence, TR, bvals
+
+end
+
+
 
 function Sim(sequence, geometry, T1::Int64, T2::Int64, diffusivity::Float64, end_time::Float64, n_spins::Int64, TR)
 
@@ -138,117 +196,277 @@ function Sim(sequence, geometry, T1::Int64, T2::Int64, diffusivity::Float64, end
 		off_resonance = 0.1, 
 		geometry = geometry)
 
-	time = 0:0.1:end_time
-	n_spins = n_spins
+	sim_time = 0:0.1:end_time
 
 	if end_time > TR
-		error(
-"End time cannot exceed TR.")
+		error("End time cannot exceed TR.")
 
 	end
-	return simulation, n_spins, time
 
-
-function ReadIndex(simulation, n_spins::Int64, time, skip_TR::Int64, nTR::Int64, sim_i::Int, nTR_i::Int, l_t::Int)
-
-	avg_signals = readout(
-		n_spins,       # Number of spins to be simulated
-         	simulation, 
-         	time,
-        		skip_TR = skip_TR, # Dummy cycles to stabilize re-magnetization
-        		nTR = nTR,
-        		return_snapshot = false
-    		)
-
-
-	if sim_i > size(avg_signals, 1)
-        		error("sim_i exceeds the number of simulations in avg_signals.")
-    	end
-
-	if nTR_i > nTR
-       		error("nTR_i exceeds the number of TR cycles in avg_signals.")
-    	end
-
-   	if l_t == 1
-
-        		signal_type = "Transverse"
-        		signals = transverse.(avg_signals[sim_i, :, nTR_i])
-		
-		Plots.scatter(time, signals,
-			xlabel = "Time (ms)",
-			ylabel = "Transverse Signal Strength",
-			title = "Transverse Signal against time",
-			legend = false)
-
-    	elseif l_t == 2
-
-        		signal_type = "Longitudinal"
-        		signals = longitudinal.(avg_signals[sim_i, :, nTR_i])
-
-		Plots.scatter(time, signals,
-			xlabel = "Time (ms)",
-			ylabel = "Longitudinal Signal Strength",
-			title = "Longitudinal Signal against time",
-			legend = false)
-
-    	else 
-
-        		error("Invalid l_t value. Use 1 for Transverse or 2 for Longitudinal signals.")
-
-    	end
-    	return signals, signal_type
+	return simulation, n_spins, sim_time
 
 end
 
+
+
+function ReadIndex(simulation, n_spins::Int64, sim_time, skip_TR::Int64, nTR::Int64, sim_b::Int, sim_g::Int, nTR_i::Int, l_t::Int, grad)
+
+	avg_signals = readout(
+		n_spins,              # Number of spins to be simulated
+                  	simulation, 
+                  	sim_time,
+                		skip_TR = skip_TR, # Dummy cycles to stabilize re-magnetization
+                		nTR = nTR,
+                		return_snapshot = true
+        		)
+
+	sim_b = sim_b
+	sim_g = sim_g
+	sim_i = length(grad)*(sim_b - 1) + sim_g
+
+	if sim_i > size(avg_signals, 1)
+                		error("sim_i exceeds the number of simulations in avg_signals.")
+        	end
+
+	if nTR_i > nTR
+              		error("nTR_i exceeds the number of TR cycles in avg_signals.")
+        	end
+
+      	if l_t == 1
+
+                		signal_type = "Transverse"
+                		signals = transverse.(avg_signals[sim_i, :, nTR_i])
+
+
+        	elseif l_t == 2
+
+                		signal_type = "Longitudinal"
+                		signals = longitudinal.(avg_signals[sim_i, :, nTR_i])
+
+
+        	else 
+
+                		error("Invalid l_t value. Use 1 for Transverse or 2 for Longitudinal signals.")
+
+        	end
+        	return signals, signal_type, sim_b, sim_g, avg_signals
+
+end
+
+function Plot_signals(signals, sim_time)
+
+	f = Figure(resolution = (1000, 750))
+	
+	ax = Axis(f[1, 1],
+		title = "Signal against simulation time",
+		xlabel = "Time (ms)",
+		ylabel = "Signal strength"
+	)
+
+	lines!(ax, sim_time, signals, label = "Signal")
+
+	display(f)
+
+	return f
+end
+
+
+#Auxilliary function 1 as below
+
+function Direction(grad)
+
+	origin = Point3f0(0.0, 0.0, 0.0)
+
+	f = Figure()
+	ax = LScene(f[1, 1], scenekw=(show_axis=true, ))
+
+	for (i, g) in enumerate(grad)
+
+		if length(g) != 3
+
+			error("All vectors in grad must be 3-dimensional.")
+
+		end
+
+		u_x, u_y, u_z = g #The i-th 3D vector
+		arrows!(ax, [origin], [Point3f0(u_x, u_y, u_z)], arrowsize = 0.2, label = "Gradient $i")
+
+	end
+
+	return f
+
+end
+
+#Auxilliary function 2 as below
+#For a normalized gradient direction to rotate, we need rotations!
+
+function GradGen(m, n)
+
+	grad = Vector{Vector{Float64}}()
+
+	for i in 1:m
+	
+		theta = i*(2*pi)/m
+		grad_add = [0, 0, 1]' * [1 0 0; 0 cos(theta) -sin(theta); 0 sin(theta) cos(theta)]
+		grad_temp = normalize(vec(grad_add'))
+
+		push!(grad, grad_temp)
+
+		for j in 1:n
+
+			phi = j*(2*pi)/n
+			grad_add = [cos(phi) 0 sin(phi); 0 1 0; -sin(phi) 0 cos(phi)]*grad_temp
+			grad = push!(grad, normalize(grad_add))
+
+		end
+	end
+
+	grad = [round.(normalize(g), digits = 1) for g in grad]
+
+	return grad
+end
+
+
+#Wrapper function as below
+
+
 function MCMRSim(
-               geo_mode::Int64, # Defines which geometry
-               geo_params::Tuple, # Defines what parameters
-               seq_params::Tuple, # Defines sequence parameters
-               sim_params::NamedTuple, # Defines simulation parameters
-               out_params::NamedTuple # Defines readout and indexing parameters
-               )
+                              geo_mode::Int64, # Defines which geometry
+                              geo_params, # Defines what parameters
+	        seq_mode::Int64, #Defines which mode of seq gen
+                              seq_params::Tuple, # Defines sequence parameters
+                              sim_params::NamedTuple, # Defines simulation parameters
+                              out_params::NamedTuple, # Defines readout and indexing parameters
+	        optimize::Bool = false
+                              )
 
 	geometry = nothing
 
 	if geo_mode == 1
 
 		geometry = NoColSpheres(geo_params...)
-        		plot(geometry)
 
-    	elseif geo_mode == 2
+        	elseif geo_mode == 2
 
-        		geometry = NoColCylinder(geo_params...)
-        		plot(geometry)
+                		geometry = NoColCylinder(geo_params...)
 
-   	else
-        		error("Invalid geo_mode. Enter 1 for Spheres or 2 for Bendy Cylinders.")
+	elseif geo_mode == 3
+		
+		geometry = MeshGen(geo_params)
 
-    	end
+      	else
+                		error("Invalid geo_mode. Enter 1 for Spheres or 2 for Bendy Cylinders.")
 
-    	sequence, TR = B_Iter(seq_params...)
+        	end
 
-    	sim_params_up = NamedTuple{(:sequence, :geometry, :T1, :T2, :diffusivity, :end_time, :n_spins, :TR)}(
-        		(sequence, geometry, sim_params.T1, sim_params.T2, sim_params.diffusivity, sim_params.end_time, sim_params.n_spins, TR)
-    	)
+	sequence = nothing 
+	TR = 0 
+	grad = []
+	bvals = []
 
-    	simulation, n_spins, time = Sim(sim_params_up...)
+	if seq_mode == 1 
 
-    	out_params_up = NamedTuple{(:simulation, :n_spins, :time, :skip_TR, :nTR, :sim_i, :nTR_i, :l_t)}(
-        		(simulation, n_spins, time, out_params.skip_TR, out_params.nTR, out_params.sim_i, out_params.nTR_i, out_params.l_t)
-    	)
+        		grad = seq_params[5]    # Extract gradients for DWI
+    		sequence, TR, bvals = B_Iter(seq_params[1], seq_params[2], seq_params[3], seq_params[4], grad)
 
-    	signals, signal_type = ReadIndex(out_params_up...)
+	elseif seq_mode == 2
 
-    	return signals, signal_type
+      		sequence, TR, bvals = B_IterSE(seq_params[1], seq_params[2], seq_params[3], seq_params[4], seq_params[5])
+
+	else
+
+      		error("Invalid seq_mode. Use 1 for DWI mode or 2 for Spin Echo mode.")
+
+	end
+
+
+	sim_i = 0 
+
+	if seq_mode == 1 
+
+		sim_i = length(grad) * (out_params.sim_b - 1) + out_params.sim_g 
+		#FOR 6 ORIENTATIONS AND 5 GRADS, [1] [2] [3] [4] [5] [6] IS FIXED B
+
+	elseif seq_mode == 2
+
+		sim_i = out_params.sim_b
+
+	end
+
+        	sim_params_up = NamedTuple{(:sequence, :geometry, :T1, :T2, :diffusivity, :end_time, :n_spins, :TR)}(
+                		(sequence, geometry, sim_params.T1, sim_params.T2, sim_params.diffusivity, sim_params.end_time, sim_params.n_spins, TR)
+        	)
+
+        	simulation, n_spins, sim_time = Sim(sim_params_up...)
+
+        	out_params_up = NamedTuple{(:simulation, :n_spins, :end_time, :skip_TR, :nTR, :sim_b, :sim_g, :nTR_i, :l_t)}(
+                		(simulation, n_spins, sim_time, out_params.skip_TR, out_params.nTR, out_params.sim_b, out_params.sim_g, out_params.nTR_i, 	out_params.l_t)
+        	)
+
+	signals, signal_type, _, _, avg_signals = ReadIndex( 
+		out_params_up.simulation, 
+		out_params_up.n_spins, 
+		sim_time, 
+		out_params_up.skip_TR, 
+		out_params_up.nTR, 
+		out_params_up.sim_b, 
+		out_params_up.sim_g, 
+		out_params_up.nTR_i, 
+		out_params_up.l_t, 
+		grad
+		)
+
+	return geometry, simulation, signals, signal_type, sim_time, bvals, avg_signals
 
 end
 
-geo_mode = 1 
-geo_params = (2.0, 0.6, 1.0, 0.5, 1000, 0.1, 0.2) 
-seq_params = (0.05, 10, 80, 300) 
-sim_params = (T1 = 780, T2 = 90, diffusivity = 2.0, end_time = 299., n_spins = 100) 
-out_params = (skip_TR = 1, nTR = 3, sim_i = 1, nTR_i = 1, l_t = 1) 
+#grad = [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]]
+#grad = GradGen(2, 2) #Divergence not due to gradient?
 
-signals, signal_type = MCMRSim(geo_mode, geo_params, seq_params, sim_params, out_params)
-println("Signals: ", signals)
-println("Signal Type: ", signal_type)
+geo_mode = 1
+geo_params = (0.5, 0.3, 1., 0.5, 1000, 0.1, 0.2) 
+seq_mode = 1
+seq_params = (0.1, 5, 80, 300, grad) 
+#seq_params = (0.05, 1, 5.0, 50, 250)
+sim_params = (T1 = 1000, T2 = 100, diffusivity = 2.0, end_time = 299., n_spins = 10) 
+out_params = (skip_TR = 1, nTR = 1, sim_b = 1, sim_g = 1, nTR_i = 1, l_t = 1) 
+
+geometry, simulation, signals, signal_type, sim_time, bvals, avg_signals = MCMRSim(geo_mode, geo_params, seq_mode, seq_params, sim_params, out_params)
+
+Wrapped = (geometry, simulation, signals, signal_type, sim_time, bvals, avg_signals)
+
+#println("Signals: ", signals)
+#println("Signal Type: ", signal_type)
+
+
+#UNDER DEVELOPMENT FUNCTIONS AND TO-BE-IMPLEMENTED FEATURES
+
+function HARDI(b_index::Int64, time_index::Int64, nTR_i::Int64, grad, avg_signals)
+
+	signals_extract = []
+
+
+	for i in 1:length(grad)
+
+		sim_index = i + (b_index - 1) * length(grad)
+		
+		signal = avg_signals[sim_index, time_index, nTR_i]
+		push!(signals_extract, signal)
+
+		#Extract info from fixed bvals, fixed time, for all gradients, fit them in something else
+
+	end
+
+	signals_extract = transverse.(signals_extract)
+
+
+	#for i in 1:length(grad)
+
+		#grad_mag = signals_extract[i]*grad[i]
+
+	#end
+
+	return signals_extract
+end
+
+HARDI(1, 1500, 1, grad, avg_signals)
