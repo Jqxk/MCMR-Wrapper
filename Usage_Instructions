@@ -1,0 +1,193 @@
+MCMR Wrapper created by Ho Pak Hei, Victor Kam, Catherine Ni
+version 1.0.0, last updated 10/02/2025
+
+The MCMR Wrapper function was created with the aim of streamlining the process of simulating multiple diffusion-weighted Magnetic Resonance Imaging (dwMRI) experiments simultaneously, given a geometry that is either created from scratch using one of the following:
+
+- MCMR defined geometry, or;
+- imported from Blender, integrated with this Wrapper, or;
+- Imported as a .ply file from other softwares or models.
+
+Step 1: Defining or Importing a geometry
+Step 2: Defining a dwMRI/Spin-echo MRI sequence
+Step 3: Defining a simulation
+Step 4: Indexing simulation results for signal attainment
+Step 5: Visualise signal using other auxiliary functions/modalities
+
+Inputs include:
+
+	Geo_mode (expects an integer). 
+
+	Mode 1: Creates a voxel of spheres, which accepts Geo_params (expects a tuple) that defines the geometry. 
+	Mode 2: Creates a collision-free set of cylinders, which accepts Geo_params (expects a tuple) that defines a geometry.
+	Mode 3: Imports a geometry file into the simulator; note that MCMR.jl ONLY accepts .ply files.
+
+
+
+	Geo_params (expects a tuple, where parameters vary depending on Geo_mode)
+
+	Mode 1: Geo_params expects the following inputs with the following data types:
+
+		Size (expects a Float64): Defines the size of the voxel.
+		td (expects a Float64): Defines the target density of spheres, between 0-1.
+		mean (expects a Float64): Defines the mean of the gamma distribution algorithm that defines sphere packing.
+		var (expects a Float64): Defines the variance of the gamma distribution algorithm that defines sphere packing.
+		max_iter (expects an Int64): Defines the maximum amount of iterations in generating a valid geometry for the specified parameters.
+		min_r (expects a Float64): Defines the radius of the smallest possible generated sphere.
+		max_r (expects a Float64): Defines the radius of the largest possible generated sphere.
+
+	Mode 2: Geo_params expects the following inputs with the following data types:
+
+		N (expects an Int64): Defines the number of cylinders to be generated.
+		max_attempts (expects an Int64): Defines the maximum amount of iterations in generating a valid geometry for the specified parameters.
+		z_step (expects an Int64): Defines the number of steps in the z-direction (height) the cylinders are generated from.
+		z_gap (expects a Float64): Defines the distance between each step in the z-direction in generating cylinders.
+		tortuosity (expects a Float64): Defines the ‘bendiness’ of the cylinders between each height step.
+		spline (expects an Integer): Defines the order of the bendy cylinder/spline, i.e. how many bends it contains.
+		min_r (expects a Float64): Defines the radius of the smallest possible generated cylinder.
+		max_r (expects a Float64): Defines the radius of the largest possible generated cylinder.
+		xy_bound (expects a Float64): Defines the boundaries on the xy (transverse) plane for the geometry.
+
+	Mode 3: Geo_params expects the following inputs with then following data types:
+
+		geo_params (expects a string): Enter a valid directory to the geometry directly as geo_params (example: Users/HoPakHei/Documents/MCMR/<file_name>).
+
+
+
+	Seq_mode (expects an integer).
+
+	Mode 1: Allows definition of sequences in diffusion-weighted MRI mode, where the signal contrast and exponential decay is dependent on both T2 proton dephasing and diffusion of protons in water molecules.
+	Mode 2: Allows definition of sequences in Spin-Echo MRI mode, where the signal contrast and exponential decay only depends on T2 proton dephasing.
+
+
+
+	Seq_params (expects a tuple, where parameters vary depending on Seq_mode)
+
+	Mode 1: Seq_params expects the following inputs with the following data types:
+
+		b_step (expects a Float64): Defines the step size between each b value.
+		k (expects an Integer): Defines how many incremental steps there are within the range of b values used.
+		t_echo (expects an Integer): Defines the echo time for the sequence, in milliseconds (ms).
+		t_rep (expects an Integer): Defines the repetition time for the sequence, in milliseconds (ms).
+		grad (expects a Vector of Vectors with Float64): Defines the directions of the magnetic gradients applied during the experiment. Each nested vector should contain 3 elements. By default, this is [[1.0, 0.0, 0.0]].
+
+	Mode 2: Seq_params expects the following inputs with the following data types:
+
+		b_step (expects a Float64): Defines the step size between each b value.
+		k (expects an Integer): Defines how many incremental steps there are within the range of b values used.
+		delay: Defines the delay between spin echo pulses, in milliseconds (ms).
+		t_echo (expects an Integer): Defines the echo time for the sequence, in milliseconds (ms).
+		t_rep (expects an Integer): Defines the repetition time for the sequence, in milliseconds (ms).
+
+
+
+	Sim_params (expects a tuple). 
+
+	sequence: The sequence created through defining Seq_params. This will have been done within the wrapper.
+	simulation: The simulation created through defining Sim_params. This will have been done within the wrapper.
+	
+	T1 (expects an Int64): Defines the T1 magnetization time of the tissue type of interest, in milliseconds (ms). For realistic simulations, ensure that this matches physiological data.
+	T2 (expects an Int64): Defines the T2 relaxation time of the tissue type of interest, in milliseconds (ms). For realistic simulations, ensure that this matches physiological data.
+	diffusivity (expects: Defines the rate at which fluid (in the case of dwMRI, water) flows, given a defined geometry and dwMRI sequence.
+	end_time (expects a Float64): Defines the time duration that the simulation should run for, in milliseconds (ms) corrected to 1 decimal place. Note that this should NOT >= the repetition time (e.g. if the TR is set as 300 ms, end_time should be a maximum of 299 ms).
+	n_spins (expects an Int64): Defines the number of spins (protons) to be simulated within the geometry.
+
+
+
+	Out_params (expects a tuple).
+
+	skip_TR (expects an Int64): Defines the number of repetition time cycles to be skipped/omitted.
+	nTR (expects an Int64): Defines the number of repetition time cycles that the simulation should run for, AFTER the number of repetition time cycles to be skipped.
+	sim_b (expects an Int64): Indexes the desired b value that is simulated. To ensure indexing of the correct b value, refer to b_step and k previously defined.
+	sim_g (expects an Int64): Indexes the desired magnetic gradient direction that is simulated. To ensure indexing of the correct gradient, refer to grad previously defined.
+	nTR_i (expects an Int64): Indexes the desired repetition time cycle. To ensure indexing of the correct repetition time cycle, refer to nTR defined above.
+	l_t (expects either 1 or 2): Extracts either transverse signal data when l_t = 1, or longitudinal signal data when l_t = 2.
+
+	(example: For the following parameters defined,
+	b_step = 0.05
+	k = 10
+	grad = [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]
+	
+	Out_params = (1, 5, 3, 2, 3, 1) therefore refers to:
+
+	Skipping the 1st TR cycle.
+	Simulate for 5 subsequent TR cycles, namely from the 2nd to the 6th cycle.
+	Simulate the 3rd b-value, which in this case is 0.05 * 3 = 0.15.
+	Simulate the 2nd gradient, which in this case is the unit-vector y pointed in the negative direction [0.0, -1.0, 0.0].
+	Index the 3rd simulated TR cycle. Due to skipping the 1st one, this will be the 4th TR cycle.
+	Extract transverse data, since l_t = 1.)
+	
+
+Outputs include:
+
+	geometry: The previously defined geometry using the wrapper function. Refer to geo_mode and geo_params.
+	simulation: The previously defined simulation using the wrapper function. Refer to sim_params.
+	signals: Returns a vector with the same size as sim_time, containing the indexed signal strength against time from t = 0, in 0.1 millisecond (ms) increments. 
+	signal_type: Returns “transverse” for l_t = 1, or “longitudinal” for l_t = 2. Refer to l_t.
+	sim_time: Returns a vector that covers the time the MRI experiment will run for from t = 0, in 0.1 millisecond (ms) increments.
+	bvals: Returns a vector that covers all b-values used to run the MRI experiment.
+	avg_signals: Returns an array that contains all signals simulated for all defined b values, gradients, time and nTR. Refer to b_step, k, grad, sim_time and nTR_i. 
+	
+
+Auxiliary Functions for Usability:
+
+	Direction function:
+
+	Allows for the user to visualize the directions of gradients with arrows on a Makie plot.
+
+	Input:
+
+		grad (expects a Vector of Vectors with Float64): Refer to grad as previously defined in seq_params.
+
+	Output:
+
+		A plot that displays the directions of gradients with arrowheads.
+
+	GradGen function:
+
+	Allows for the generation of different gradient directions that span radially/spherically.
+
+	Inputs:
+
+		m (expects an Int64): defines the number of gradient directions equally divided on the yz-plane.
+		n (expects an Int64): defines the number of gradient directions equally divided on the xz-plane.
+
+	Output:
+
+		A nested vector that contains all evenly radially/spherically distributed gradient directions. To visualize, one can enter Direction(GradGen(m, n)).
+
+	HARDI_signals function:
+
+	Allows for the simulation and extraction of HARDI (High Angular Resolution Diffusion Imaging) data, which is used commonly in analysis of the anisotropy and orientational information for microstructures within the brain.
+
+	Inputs: 
+
+		b_index (expects an Int64): Indexes the desired b value that is simulated. To ensure indexing of the correct b value, refer to b_step and k previously defined.
+		time_index (expects an Int64): Indexes the desired time value. Note that each element differs by a step of 0.1 milliseconds (ms). (e.g. If the time sampled is at t = 80ms, index the 80*10+1 = 801-th element.
+		nTR_i (expects an Int64): Indexes the desired repetition time cycle. To ensure indexing of the correct repetition time cycle, refer to nTR defined above.
+		grad (expects a Vector of Vectors with Float64): Defines the directions of the magnetic gradients applied during the experiment. Each nested vector should contain 3 elements. By default, this is [[1.0, 0.0, 0.0]].
+		Example: [[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0]]
+		avg_signals (expects a 3-dimensional array, i by j by k): Returns an array that contains all signals simulated for all defined b values, gradients, time and nTR. Refer to b_step, k, grad, sim_time and nTR_i. 
+
+	Output:
+
+		A tuple that contains (signals_extract, signals_plot), where
+		signals_extract: an n-element vector that contains the magnitude of the HARDI signals obtained for every grad direction, in the specified order defined by grad.
+		signals_plot: an n-element vector that contains the magnitude of the HARDI signals multiplied by every grad direction, which is used for plotting and visualization of HARDI data.
+
+	HARDI_plot function:
+
+	Allows for the visualization of the HARDI data obtained on a 3D point-plot.
+
+	Input:
+
+		signals_plot: an n-element vector that contains the magnitude of the HARDI signals multiplied by every grad direction, refer to above.
+
+	Output:
+		
+		A 3D plot of points, with coordinates determined by the magnitude of the HARDI signals multiplied by every grad direction.
+		
+
+	
+
+	
+
