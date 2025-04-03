@@ -3,10 +3,12 @@ using MRIBuilder;
 using Plots;
 using CairoMakie;
 using GLMakie;
-
+using MAT;
+using Meshes;
+using GeometryBasics;
 
 geometry = [];
-radii = [1.];
+radii = [5.];
 
 for i in 1:length(radii)
 
@@ -14,7 +16,7 @@ for i in 1:length(radii)
 
 	Cylinder_group = Cylinders(
 		radius = radii[i],
-		repeats = [radii[i]*2.1, radii[i]*2.1],
+		repeats = [radii[i]*2.5, radii[i]*2.5],
 		R1_surface = 0.,
 		R1_inside = 0.,
 		R2_surface = 0.,
@@ -30,6 +32,13 @@ for i in 1:length(radii)
 
 end
 return geometry
+
+#Optionally, define your own mesh
+
+#geometry = load_mesh("Users/jqxk/Documents/MCMR/Axon_045.ply")
+#geometry = [geometry]
+
+#radii = [0.45];
 
 #Sequence definition part
 
@@ -87,8 +96,8 @@ function Get_SO(iterations = 1, orientation = [0.0, 1.0, 0.0], mode = 1)
 	else
 
 		error("Mode must either be 1 (b-sweep diameter variation) or 2 (3D HARDI).")
+
 	end
-		
 
 return b_scales, G_scales, orientations
 end
@@ -97,11 +106,11 @@ end
 #b_scales, G_scales, orientations = Get_SO(21, [1., 0., 0.], 1)
 
 #MODE 2 EXAMPLE: 
-b_scales, G_scales, orientations = Get_SO(50, [1., 0., 0.,], 2)
+b_scales, G_scales, orientations = Get_SO(100, [1., 0., 0.,], 2)
 
 #Sequence Hyperparameters & Scanner
 
-b_val_max = 1.5
+b_val_max = 2.5
 b_scales_plot = b_val_max*b_scales
 
 TE = 100
@@ -129,9 +138,9 @@ for i in 1:length(geometry)
 		geometry = geometry[i],
 		R1 = 1/780,
 		R2 = 1/90,
-		diffusivity = 2.,
+		diffusivity = 1.70,
 		off_resonance = 0.,
-		permeability = 0.01)
+		permeability = 0.)
 
 	push!(simulations, Simulation_group)
 
@@ -148,7 +157,7 @@ transverse = [];
 for i in 1:length(simulations)
 
 	Readout_group = readout(
-		1000,
+		5000,
 		simulations[i],
 		sim_time,
 		skip_TR = 1,
@@ -204,47 +213,87 @@ end
 
 transverse = Transverse(1)
 
+S0 = transverse[1, :]  
+
+transverse .= transverse./S0'
+
+
 #HARDI Plotting definition (ONLY FOR HARDI VISUALISATION)
 
+function HARDI_plot(transverse, orientations, mode=1)
 
-function HARDI_plot(transverse, orientations)
-
-	transverse = vec(transverse)
 	points = Vector{Vector{Float64}}()
 	points_orientations = Vector{Vector{Float64}}()
 
-	for i in 1:length(transverse)
+	if mode == 1
 
-		push!(points, transverse[i]*orientations[i])
-		push!(points_orientations, orientations[i])
+        		points = [transverse[i] * orientations[i] for i in 1:length(transverse)]
+        		vertices = Point3f0.(points)
+
+        		lat_count = 10
+        		lon_count = 20
+
+        		faces = GeometryBasics.TriangleFace{Int}[]
+
+        		for lat in 1:(lat_count - 1)
+                		for lon in 1:(lon_count - 1)
+
+                        		i = (lat - 1) * lon_count + lon
+                        		i_right = i + 1
+                        		i_down = i + lon_count
+                       		i_diag = i + lon_count + 1
+
+                    			if i_diag ≤ length(vertices)
+                        			push!(faces, TriangleFace(i, i_down, i_diag))
+                        			push!(faces, TriangleFace(i, i_diag, i_right))
+                    			end
+            		end
+		end
+
+        		mesh = GeometryBasics.Mesh(vertices, faces)
+        
+        		fig = Figure()
+
+        		ax = Axis3(fig[1, 1], title = "HARDI Mesh")
+        		mesh!(ax, mesh, color = [v[3] for v in vertices], colormap = :coolwarm;
+            	transparency = true)
+
+	elseif mode == 2
+
+		for i in 1:length(transverse)
+
+			push!(points, transverse[i]*orientations[i])
+			push!(points_orientations, orientations[i])
+
+		end
+
+		x_points = [p[1] for p in points]
+		y_points = [p[2] for p in points]
+		z_points = [p[3] for p in points]
+
+		x_o = [p[1] for p in points_orientations]
+		y_o = [p[2] for p in points_orientations]
+		z_o = [p[3] for p in points_orientations]
+
+		fig = Figure()
+
+		ax1 = Axis3(fig[1, 1], 
+		title="$(length(orientations)) sampled orientations")
+
+		GLMakie.scatter!(ax1, x_o, y_o, z_o, markersize = 5)
+
+		ax2 = Axis3(fig[1, 2], 
+		title="HARDI plot for $(length(orientations)) spherically sampled points")
+
+      		GLMakie.scatter!(ax2, x_points, y_points, z_points, markersize = 5)
 
 	end
-
-	x_points = [p[1] for p in points]
-	y_points = [p[2] for p in points]
-	z_points = [p[3] for p in points]
-
-	x_o = [p[1] for p in points_orientations]
-	y_o = [p[2] for p in points_orientations]
-	z_o = [p[3] for p in points_orientations]
-
-	fig = Figure()
-
-	ax1 = Axis3(fig[1, 1], 
-	title="$(length(orientations)) sampled orientations")
-
-	GLMakie.scatter!(ax1, x_o, y_o, z_o, markersize = 5)
-
-	ax2 = Axis3(fig[1, 2], 
-	title="HARDI plot for $(length(orientations)) spherically sampled points")
-
-      	GLMakie.scatter!(ax2, x_points, y_points, z_points, markersize = 5)
 
 display(fig)
 return points
 end
 
-points = HARDI_plot(transverse, orientations)
+points = HARDI_plot(transverse, orientations, 1)
 
 
 	
@@ -269,3 +318,11 @@ end
 
 axislegend(ax)
 display(fig)
+
+#Export to MATLAB
+
+matopen("transverse_signals.mat", "w") do file
+	write(file, "transverse", transverse)
+	write(file, "b_values", b_scales_plot)
+	write(file, "radii", radii)
+end
